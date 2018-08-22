@@ -53,3 +53,4 @@ tests/test_*
 # Generated docs
 doc/doxygen-output
 
+.vscode/
