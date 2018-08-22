@@ -6,7 +6,11 @@ ENV \
         autoconf                      \
         automake                      \
         libtool                       \
-        mingw32-gcc"
+        mingw32-cairo                 \
+        mingw32-dlfcn                 \
+        mingw32-gcc                   \
+        mingw32-libjpeg-turbo         \
+        mingw32-libpng"
 
 COPY . /guac
 
