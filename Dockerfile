@@ -22,6 +22,8 @@ RUN yum -y update                        && \
     yum -y install $BUILD_DEPENDENCIES   && \
     yum clean all                        && \
     cp /guac/mingw/libuuid-16.dll $MINGW_HOME/lib/libuuid.dll.a && \
+    cp /guac/mingw/libvncclient.dll* $MINGW_HOME/lib/ && \
     cp /usr/include/uuid.h $MINGW_HOME/include && \
+    cp -r /guac/mingw/include/rfb $MINGW_HOME/include/ && \
     cd /guac/mingw && \
     ./build.sh
