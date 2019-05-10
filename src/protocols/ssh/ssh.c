@@ -207,9 +207,10 @@ void* ssh_client_thread(void* data) {
 
     /* Create terminal */
     ssh_client->term = guac_terminal_create(client, ssh_client->clipboard,
-            settings->font_name, settings->font_size,
-            settings->resolution, settings->width, settings->height,
-            settings->color_scheme, settings->backspace);
+            settings->disable_copy, settings->max_scrollback,
+            settings->font_name, settings->font_size, settings->resolution,
+            settings->width, settings->height, settings->color_scheme,
+            settings->backspace);
 
     /* Fail if terminal init failed */
     if (ssh_client->term == NULL) {
@@ -233,6 +234,9 @@ void* ssh_client_thread(void* data) {
         return NULL;
     }
 
+    /* Ensure connection is kept alive during lengthy connects */
+    guac_socket_require_keep_alive(client->socket);
+
     /* Open SSH session */
     ssh_client->session = guac_common_ssh_create_session(client,
             settings->hostname, settings->port, ssh_client->user, settings->server_alive_interval,
@@ -252,6 +256,17 @@ void* ssh_client_thread(void* data) {
                 "Unable to open terminal channel.");
         return NULL;
     }
+
+    /* Set the client timezone */
+    if (settings->timezone != NULL) {
+        if (libssh2_channel_setenv(ssh_client->term_channel, "TZ",
+                    settings->timezone)) {
+            guac_client_log(client, GUAC_LOG_WARNING,
+                    "Unable to set the timezone: SSH server "
+                    "refused to set \"TZ\" variable.");
+        }
+    }
+
 
 #ifdef ENABLE_SSH_AGENT
     /* Start SSH agent forwarding, if enabled */
@@ -317,6 +332,16 @@ void* ssh_client_thread(void* data) {
         return NULL;
     }
 
+    /* Forward specified locale */
+    if (settings->locale != NULL) {
+        if (libssh2_channel_setenv(ssh_client->term_channel, "LANG",
+                    settings->locale)) {
+            guac_client_log(client, GUAC_LOG_WARNING,
+                    "Unable to forward locale: SSH server refused to set "
+                    "\"LANG\" environment variable.");
+        }
+    }
+
     /* If a command is specified, run that instead of a shell */
     if (settings->command != NULL) {
         if (libssh2_channel_exec(ssh_client->term_channel, settings->command)) {
@@ -335,6 +360,7 @@ void* ssh_client_thread(void* data) {
 
     /* Logged in */
     guac_client_log(client, GUAC_LOG_INFO, "SSH connection successful.");
+    guac_terminal_start(ssh_client->term);
 
     /* Start input thread */
     if (pthread_create(&(input_thread), NULL, ssh_input_thread, (void*) client)) {

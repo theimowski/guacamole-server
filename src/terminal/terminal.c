@@ -22,6 +22,7 @@
 #include "common/clipboard.h"
 #include "common/cursor.h"
 #include "terminal/buffer.h"
+#include "terminal/color-scheme.h"
 #include "terminal/common.h"
 #include "terminal/display.h"
 #include "terminal/palette.h"
@@ -30,7 +31,6 @@
 #include "terminal/terminal_handlers.h"
 #include "terminal/types.h"
 #include "terminal/typescript.h"
-#include "terminal/xparsecolor.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -149,6 +149,46 @@ static void __guac_terminal_force_break(guac_terminal* terminal, int row, int ed
 
 }
 
+/**
+ * Returns the number of rows available within the terminal buffer, taking
+ * changes to the desired scrollback size into account. Regardless of the
+ * true buffer length, only the number of rows that should be made available
+ * will be returned.
+ *
+ * @param term
+ *     The terminal whose effective buffer length should be retrieved.
+ *
+ * @return
+ *     The number of rows effectively available within the terminal buffer,
+ *     taking changes to the desired scrollback size into account.
+ */
+static int guac_terminal_effective_buffer_length(guac_terminal* term) {
+
+    int scrollback = term->requested_scrollback;
+
+    /* Limit available scrollback to defined maximum */
+    if (scrollback > term->max_scrollback)
+        scrollback = term->max_scrollback;
+
+    /* There must always be at least enough scrollback to cover the visible
+     * terminal display */
+    else if (scrollback < term->term_height)
+        scrollback = term->term_height;
+
+    /* If the buffer contains more rows than requested, pretend it only
+     * contains the requested number of rows */
+    int effective_length = term->buffer->length;
+    if (effective_length > scrollback)
+        effective_length = scrollback;
+
+    return effective_length;
+
+}
+
+int guac_terminal_available_scroll(guac_terminal* term) {
+    return guac_terminal_effective_buffer_length(term) - term->term_height;
+}
+
 void guac_terminal_reset(guac_terminal* term) {
 
     int row;
@@ -171,7 +211,7 @@ void guac_terminal_reset(guac_terminal* term) {
     term->scroll_offset = 0;
 
     /* Reset scrollbar bounds */
-    guac_terminal_scrollbar_set_bounds(term->scrollbar, term->term_height - term->buffer->length, 0);
+    guac_terminal_scrollbar_set_bounds(term->scrollbar, 0, 0);
     guac_terminal_scrollbar_set_value(term->scrollbar, -term->scroll_offset);
 
     /* Reset flags */
@@ -265,250 +305,9 @@ void* guac_terminal_thread(void* data) {
 
 }
 
-/**
- * Compare a non-null-terminated string to a null-terminated literal, in the
- * same manner as strcmp().
- *
- * @param str_start
- *     Start of the non-null-terminated string.
- *
- * @param str_end
- *     End of the non-null-terminated string, after the last character.
- *
- * @param literal
- *     The null-terminated literal to compare against.
- *
- * @return
- *     Zero if the two strings are equal and non-zero otherwise.
- */
-static int guac_terminal_color_scheme_compare_token(const char* str_start,
-        const char* str_end, const char* literal) {
-
-    const int result = strncmp(literal, str_start, str_end - str_start);
-    if (result != 0)
-        return result;
-
-    /* At this point, literal is same length or longer than
-     * | str_end - str_start |, so if the two are equal, literal should
-     * have its null-terminator at | str_end - str_start |. */
-    return (int) (unsigned char) literal[str_end - str_start];
-}
-
-/**
- * Strip the leading and trailing spaces of a bounded string.
- *
- * @param[in,out] str_start
- *     Address of a pointer to the start of the string. On return, the pointer
- *     is advanced to after any leading spaces.
- *
- * @param[in,out] str_end
- *     Address of a pointer to the end of the string, after the last character.
- *     On return, the pointer is moved back to before any trailing spaces.
- */
-static void guac_terminal_color_scheme_strip_spaces(const char** str_start,
-        const char** str_end) {
-
-    /* Strip leading spaces. */
-    while (*str_start < *str_end && isspace(**str_start))
-        (*str_start)++;
-
-    /* Strip trailing spaces. */
-    while (*str_end > *str_start && isspace(*(*str_end - 1)))
-        (*str_end)--;
-}
-
-/**
- * Parse the name part of the name-value pair within the color-scheme
- * configuration.
- *
- * @param client
- *     The client that the terminal is connected to.
- *
- * @param name_start
- *     Start of the name string.
- *
- * @param name_end
- *     End of the name string, after the last character.
- *
- * @param foreground
- *     Pointer to the foreground color.
- *
- * @param background
- *     Pointer to the background color.
- *
- * @param palette
- *     Pointer to the palette array.
- *
- * @param[out] target
- *     On return, pointer to the color struct that corresponds to the name.
- *
- * @return
- *     Zero if successful or non-zero otherwise.
- */
-static int guac_terminal_parse_color_scheme_name(guac_client* client,
-        const char* name_start, const char* name_end,
-        guac_terminal_color* foreground, guac_terminal_color* background,
-        guac_terminal_color (*palette)[256],
-        guac_terminal_color** target) {
-
-    guac_terminal_color_scheme_strip_spaces(&name_start, &name_end);
-
-    if (!guac_terminal_color_scheme_compare_token(
-            name_start, name_end, GUAC_TERMINAL_SCHEME_FOREGROUND)) {
-        *target = foreground;
-        return 0;
-    }
-
-    if (!guac_terminal_color_scheme_compare_token(
-            name_start, name_end, GUAC_TERMINAL_SCHEME_BACKGROUND)) {
-        *target = background;
-        return 0;
-    }
-
-    /* Parse color<n> value. */
-    int index = -1;
-    if (sscanf(name_start, GUAC_TERMINAL_SCHEME_NUMBERED "%d", &index) &&
-            index >= 0 && index <= 255) {
-        *target = &(*palette)[index];
-        return 0;
-    }
-
-    guac_client_log(client, GUAC_LOG_WARNING,
-                    "Unknown color name: \"%.*s\".",
-                    name_end - name_start, name_start);
-    return 1;
-}
-
-/**
- * Parse the value part of the name-value pair within the color-scheme
- * configuration.
- *
- * @param client
- *     The client that the terminal is connected to.
- *
- * @param value_start
- *     Start of the value string.
- *
- * @param value_end
- *     End of the value string, after the last character.
- *
- * @param palette
- *     The current color palette.
- *
- * @param[out] target
- *     On return, the parsed color.
- *
- * @return
- *     Zero if successful or non-zero otherwise.
- */
-static int guac_terminal_parse_color_scheme_value(guac_client* client,
-        const char* value_start, const char* value_end,
-        const guac_terminal_color (*palette)[256],
-        guac_terminal_color* target) {
-
-    guac_terminal_color_scheme_strip_spaces(&value_start, &value_end);
-
-    /* Parse color<n> value. */
-    int index = -1;
-    if (sscanf(value_start, GUAC_TERMINAL_SCHEME_NUMBERED "%d", &index) &&
-            index >= 0 && index <= 255) {
-        *target = (*palette)[index];
-        return 0;
-    }
-
-    /* Parse X11 value. */
-    if (!guac_terminal_xparsecolor(value_start, target))
-        return 0;
-
-    guac_client_log(client, GUAC_LOG_WARNING,
-                    "Invalid color value: \"%.*s\".",
-                    value_end - value_start, value_start);
-    return 1;
-}
-
-/**
- * Parse a color-scheme configuration string, and return specified
- * foreground/background colors and color palette.
- *
- * @param client
- *     The client that the terminal is connected to.
- *
- * @param color_scheme
- *     A semicolon-separated list of name-value pairs, i.e.
- *     "<name>: <value> [; <name>: <value> [; ...]]".
- *     For example, "color2: rgb:cc/33/22; background: color5".
- *
- * @param[out] foreground
- *     Parsed foreground color.
- *
- * @param[out] background
- *     Parsed background color.
- *
- * @param[in,out] palette
- *     Parsed color palette. The caller is responsible for allocating a mutable
- *     array on entry. On return, the array contains the parsed palette.
- */
-static void guac_terminal_parse_color_scheme(guac_client* client,
-        const char* color_scheme, guac_terminal_color* foreground,
-        guac_terminal_color* background,
-        guac_terminal_color (*palette)[256]) {
-
-    /* Set default gray-black color scheme and initial palette. */
-    *foreground = GUAC_TERMINAL_INITIAL_PALETTE[GUAC_TERMINAL_COLOR_GRAY];
-    *background = GUAC_TERMINAL_INITIAL_PALETTE[GUAC_TERMINAL_COLOR_BLACK];
-    memcpy(palette, GUAC_TERMINAL_INITIAL_PALETTE,
-            sizeof(GUAC_TERMINAL_INITIAL_PALETTE));
-
-    /* Current char being parsed, or NULL if at end of parsing. */
-    const char* cursor = color_scheme;
-
-    while (cursor) {
-        /* Start of the current "name: value" pair. */
-        const char* pair_start = cursor;
-
-        /* End of the current name-value pair. */
-        const char* pair_end = strchr(pair_start, ';');
-        if (pair_end) {
-            cursor = pair_end + 1;
-        }
-        else {
-            pair_end = pair_start + strlen(pair_start);
-            cursor = NULL;
-        }
-
-        guac_terminal_color_scheme_strip_spaces(&pair_start, &pair_end);
-        if (pair_start >= pair_end)
-            /* Allow empty pairs, which happens, e.g., when the configuration
-             * string ends in a semi-colon. */
-            continue;
-
-        /* End of the name part of the pair. */
-        const char* name_end = memchr(pair_start, ':', pair_end - pair_start);
-        if (name_end == NULL) {
-            guac_client_log(client, GUAC_LOG_WARNING,
-                            "Expecting colon: \"%.*s\".",
-                            pair_end - pair_start, pair_start);
-            return;
-        }
-
-        /* The color that the name corresponds to. */
-        guac_terminal_color* color_target = NULL;
-
-        if (guac_terminal_parse_color_scheme_name(
-                client, pair_start, name_end, foreground, background,
-                palette, &color_target))
-            return; /* Parsing failed. */
-
-        if (guac_terminal_parse_color_scheme_value(
-                client, name_end + 1, pair_end,
-                (const guac_terminal_color(*)[256]) palette, color_target))
-            return; /* Parsing failed. */
-    }
-}
-
 guac_terminal* guac_terminal_create(guac_client* client,
-        guac_common_clipboard* clipboard,
-        const char* font_name, int font_size, int dpi,
+        guac_common_clipboard* clipboard, bool disable_copy,
+        int max_scrollback, const char* font_name, int font_size, int dpi,
         int width, int height, const char* color_scheme,
         const int backspace) {
 
@@ -556,24 +355,40 @@ guac_terminal* guac_terminal_create(guac_client* client,
         available_width = 0;
 
     guac_terminal* term = malloc(sizeof(guac_terminal));
+    term->started = false;
     term->client = client;
     term->upload_path_handler = NULL;
     term->file_download_handler = NULL;
+
+    /* Set size of available screen area */
+    term->outer_width = width;
+    term->outer_height = height;
 
     /* Init modified flag and conditional */
     term->modified = 0;
     pthread_cond_init(&(term->modified_cond), NULL);
     pthread_mutex_init(&(term->modified_lock), NULL);
 
+    /* Maximum and requested scrollback are initially the same */
+    term->max_scrollback = max_scrollback;
+    term->requested_scrollback = max_scrollback;
+
+    /* Allocate enough space for maximum scrollback, bumping up internal
+     * storage as necessary to allow screen to be resized to maximum height */
+    int initial_scrollback = max_scrollback;
+    if (initial_scrollback < GUAC_TERMINAL_MAX_ROWS)
+        initial_scrollback = GUAC_TERMINAL_MAX_ROWS;
+
     /* Init buffer */
-    term->buffer = guac_terminal_buffer_alloc(1000, &default_char);
+    term->buffer = guac_terminal_buffer_alloc(initial_scrollback,
+            &default_char);
 
     /* Init display */
     term->display = guac_terminal_display_alloc(client,
             font_name, font_size, dpi,
             &default_char.attributes.foreground,
             &default_char.attributes.background,
-            (const guac_terminal_color(*)[256]) default_palette);
+            (guac_terminal_color(*)[256]) default_palette);
 
     /* Fail if display init failed */
     if (term->display == NULL) {
@@ -589,14 +404,31 @@ guac_terminal* guac_terminal_create(guac_client* client,
     term->current_attributes = default_char.attributes;
     term->default_char = default_char;
     term->clipboard = clipboard;
+    term->disable_copy = disable_copy;
+
+    /* Calculate character size */
+    int rows    = height / term->display->char_height;
+    int columns = available_width / term->display->char_width;
+
+    /* Keep height within predefined maximum */
+    if (rows > GUAC_TERMINAL_MAX_ROWS) {
+        rows = GUAC_TERMINAL_MAX_ROWS;
+        height = rows * term->display->char_height;
+    }
+
+    /* Keep width within predefined maximum */
+    if (columns > GUAC_TERMINAL_MAX_COLUMNS) {
+        columns = GUAC_TERMINAL_MAX_COLUMNS;
+        available_width = columns * term->display->char_width;
+        width = available_width + GUAC_TERMINAL_SCROLLBAR_WIDTH;
+    }
 
     /* Set pixel size */
     term->width = width;
     term->height = height;
 
-    /* Calculate character size */
-    term->term_width   = available_width / term->display->char_width;
-    term->term_height  = height / term->display->char_height;
+    term->term_width  = columns;
+    term->term_height = rows;
 
     /* Open STDIN pipe */
     if (pipe(term->stdin_pipe_fd)) {
@@ -654,6 +486,11 @@ guac_terminal* guac_terminal_create(guac_client* client,
 
     return term;
 
+}
+
+void guac_terminal_start(guac_terminal* term) {
+    term->started = true;
+    guac_terminal_notify(term);
 }
 
 void guac_terminal_stop(guac_terminal* term) {
@@ -784,11 +621,13 @@ wait_complete:
 
 int guac_terminal_render_frame(guac_terminal* terminal) {
 
+    guac_client* client = terminal->client;
+
     int wait_result;
 
     /* Wait for data to be available */
     wait_result = guac_terminal_wait(terminal, 1000);
-    if (wait_result) {
+    if (wait_result || !terminal->started) {
 
         guac_timestamp frame_start = guac_timestamp_current();
 
@@ -800,13 +639,14 @@ int guac_terminal_render_frame(guac_terminal* terminal) {
                                 - frame_end;
 
             /* Wait again if frame remaining */
-            if (frame_remaining > 0)
+            if (frame_remaining > 0 || !terminal->started)
                 wait_result = guac_terminal_wait(terminal,
                         GUAC_TERMINAL_FRAME_TIMEOUT);
             else
                 break;
 
-        } while (wait_result > 0);
+        } while (client->state == GUAC_CLIENT_RUNNING
+                && (wait_result > 0 || !terminal->started));
 
         /* Flush terminal */
         guac_terminal_lock(terminal);
@@ -866,6 +706,9 @@ char* guac_terminal_prompt(guac_terminal* terminal, const char* title,
 
     int pos;
     char in_byte;
+
+    /* Prompting implicitly requires user input */
+    guac_terminal_start(terminal);
 
     /* Print title */
     guac_terminal_printf(terminal, "%s", title);
@@ -1015,7 +858,8 @@ int guac_terminal_scroll_up(guac_terminal* term,
             term->buffer->length = term->buffer->available;
 
         /* Reset scrollbar bounds */
-        guac_terminal_scrollbar_set_bounds(term->scrollbar, term->term_height - term->buffer->length, 0);
+        guac_terminal_scrollbar_set_bounds(term->scrollbar,
+                -guac_terminal_available_scroll(term), 0);
 
         /* Update cursor location if within region */
         if (term->visible_cursor_row >= start_row &&
@@ -1225,8 +1069,9 @@ void guac_terminal_scroll_display_up(guac_terminal* terminal,
     int row, column;
 
     /* Limit scroll amount by size of scrollback buffer */
-    if (terminal->scroll_offset + scroll_amount > terminal->buffer->length - terminal->term_height)
-        scroll_amount = terminal->buffer->length - terminal->scroll_offset - terminal->term_height;
+    int available_scroll = guac_terminal_available_scroll(terminal);
+    if (terminal->scroll_offset + scroll_amount > available_scroll)
+        scroll_amount = available_scroll - terminal->scroll_offset;
 
     /* If not scrolling at all, don't bother trying */
     if (scroll_amount <= 0)
@@ -1388,7 +1233,7 @@ static void __guac_terminal_resize(guac_terminal* term, int width, int height) {
         int shift_amount;
 
         /* Get number of rows actually occupying terminal space */
-        int used_height = term->buffer->length;
+        int used_height = guac_terminal_effective_buffer_length(term);
         if (used_height > term->term_height)
             used_height = term->term_height;
 
@@ -1424,16 +1269,15 @@ static void __guac_terminal_resize(guac_terminal* term, int width, int height) {
     if (height > term->term_height) {
 
         /* If undisplayed rows exist in the buffer, shift them into view */
-        if (term->term_height < term->buffer->length) {
+        int available_scroll = guac_terminal_available_scroll(term);
+        if (available_scroll > 0) {
 
             /* If the new terminal bottom reveals N rows, shift down N rows */
             int shift_amount = height - term->term_height;
 
             /* The maximum amount we can shift is the number of undisplayed rows */
-            int max_shift = term->buffer->length - term->term_height;
-
-            if (shift_amount > max_shift)
-                shift_amount = max_shift;
+            if (shift_amount > available_scroll)
+                shift_amount = available_scroll;
 
             /* Update buffer top and cursor row based on shift */
             term->buffer->top -= shift_amount;
@@ -1499,6 +1343,10 @@ int guac_terminal_resize(guac_terminal* terminal, int width, int height) {
     /* Acquire exclusive access to terminal */
     guac_terminal_lock(terminal);
 
+    /* Set size of available screen area */
+    terminal->outer_width = width;
+    terminal->outer_height = height;
+
     /* Calculate available display area */
     int available_width = width - GUAC_TERMINAL_SCROLLBAR_WIDTH;
     if (available_width < 0)
@@ -1508,16 +1356,25 @@ int guac_terminal_resize(guac_terminal* terminal, int width, int height) {
     int rows    = height / display->char_height;
     int columns = available_width / display->char_width;
 
+    /* Keep height within predefined maximum */
+    if (rows > GUAC_TERMINAL_MAX_ROWS) {
+        rows = GUAC_TERMINAL_MAX_ROWS;
+        height = rows * display->char_height;
+    }
+
+    /* Keep width within predefined maximum */
+    if (columns > GUAC_TERMINAL_MAX_COLUMNS) {
+        columns = GUAC_TERMINAL_MAX_COLUMNS;
+        available_width = columns * display->char_width;
+        width = available_width + GUAC_TERMINAL_SCROLLBAR_WIDTH;
+    }
+
     /* Set pixel sizes */
     terminal->width = width;
     terminal->height = height;
 
     /* Resize default layer to given pixel dimensions */
     guac_terminal_repaint_default_layer(terminal, client->socket);
-
-    /* Notify scrollbar of resize */
-    guac_terminal_scrollbar_parent_resized(terminal->scrollbar, width, height, rows);
-    guac_terminal_scrollbar_set_bounds(terminal->scrollbar, rows - terminal->buffer->length, 0);
 
     /* Resize terminal if row/column dimensions have changed */
     if (columns != terminal->term_width || rows != terminal->term_height) {
@@ -1532,6 +1389,12 @@ int guac_terminal_resize(guac_terminal* terminal, int width, int height) {
         terminal->scroll_end = rows - 1;
 
     }
+
+    /* Notify scrollbar of resize */
+    guac_terminal_scrollbar_parent_resized(terminal->scrollbar, width, height, rows);
+    guac_terminal_scrollbar_set_bounds(terminal->scrollbar,
+            -guac_terminal_available_scroll(terminal), 0);
+
 
     /* Release terminal */
     guac_terminal_unlock(terminal);
@@ -1588,6 +1451,13 @@ int guac_terminal_send_string(guac_terminal* term, const char* data) {
 }
 
 static int __guac_terminal_send_key(guac_terminal* term, int keysym, int pressed) {
+
+    /* Ignore user input if terminal is not started */
+    if (!term->started) {
+        guac_client_log(term->client, GUAC_LOG_DEBUG, "Ignoring user input "
+                "while terminal has not yet started.");
+        return 0;
+    }
 
     /* Hide mouse cursor if not already hidden */
     if (term->current_cursor != GUAC_TERMINAL_CURSOR_BLANK) {
@@ -1761,6 +1631,13 @@ int guac_terminal_send_key(guac_terminal* term, int keysym, int pressed) {
 
 static int __guac_terminal_send_mouse(guac_terminal* term, guac_user* user,
         int x, int y, int mask) {
+
+    /* Ignore user input if terminal is not started */
+    if (!term->started) {
+        guac_client_log(term->client, GUAC_LOG_DEBUG, "Ignoring user input "
+                "while terminal has not yet started.");
+        return 0;
+    }
 
     /* Determine which buttons were just released and pressed */
     int released_mask =  term->mouse_mask & ~mask;
@@ -2069,6 +1946,58 @@ void guac_terminal_dup(guac_terminal* term, guac_user* user,
 
     /* Paint scrollbar for joining user */
     guac_terminal_scrollbar_dup(term->scrollbar, user, socket);
+
+}
+
+void guac_terminal_apply_color_scheme(guac_terminal* terminal,
+        const char* color_scheme) {
+
+    guac_client* client = terminal->client;
+    guac_terminal_char* default_char = &terminal->default_char;
+    guac_terminal_display* display = terminal->display;
+
+    /* Reinitialize default terminal colors with values from color scheme */
+    guac_terminal_parse_color_scheme(client, color_scheme,
+        &default_char->attributes.foreground,
+        &default_char->attributes.background,
+        display->default_palette);
+
+    /* Reinitialize default attributes of buffer and display */
+    guac_terminal_display_reset_palette(display);
+    display->default_foreground = default_char->attributes.foreground;
+    display->default_background = default_char->attributes.background;
+
+    /* Redraw terminal text and background */
+    guac_terminal_repaint_default_layer(terminal, client->socket);
+    __guac_terminal_redraw_rect(terminal, 0, 0,
+            terminal->term_height - 1,
+            terminal->term_width - 1);
+
+    guac_terminal_notify(terminal);
+
+}
+
+void guac_terminal_apply_font(guac_terminal* terminal, const char* font_name,
+        int font_size, int dpi) {
+
+    guac_client* client = terminal->client;
+    guac_terminal_display* display = terminal->display;
+
+    if (guac_terminal_display_set_font(display, font_name, font_size, dpi))
+        return;
+
+    /* Resize terminal to fit available region, now that font metrics may be
+     * different */
+    guac_terminal_resize(terminal, terminal->outer_width,
+            terminal->outer_height);
+
+    /* Redraw terminal text and background */
+    guac_terminal_repaint_default_layer(terminal, client->socket);
+    __guac_terminal_redraw_rect(terminal, 0, 0,
+            terminal->term_height - 1,
+            terminal->term_width - 1);
+
+    guac_terminal_notify(terminal);
 
 }
 

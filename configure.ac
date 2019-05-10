@@ -18,7 +18,8 @@
 #
 
 AC_PREREQ([2.61])
-AC_INIT([guacamole-server], [1.0.0])
+AC_INIT([guacamole-server], [1.1.0])
+AC_CONFIG_AUX_DIR([build-aux])
 AM_INIT_AUTOMAKE([-Wall -Werror foreign subdir-objects])
 AM_SILENT_RULES([yes])
 
@@ -27,6 +28,9 @@ LT_INIT([dlopen])
 
 AC_CONFIG_HEADER([config.h])
 AC_CONFIG_MACRO_DIR([m4])
+
+# Use TAP test driver for tests (part of automake)
+AC_REQUIRE_AUX_FILE([tap-driver.sh])
 
 # Programs
 AC_PROG_CC
@@ -1173,6 +1177,88 @@ AM_CONDITIONAL([ENABLE_WEBP], [test "x${have_webp}" = "xyes"])
 AC_SUBST(WEBP_LIBS)
 
 #
+# libwebsockets
+#
+
+have_libwebsockets=disabled
+WEBSOCKETS_LIBS=
+AC_ARG_WITH([websockets],
+            [AS_HELP_STRING([--with-websockets],
+                            [support WebSockets @<:@default=check@:>@])],
+            [],
+            [with_websockets=check])
+
+if test "x$with_websockets" != "xno"
+then
+    have_libwebsockets=yes
+    AC_CHECK_LIB([websockets],
+                 [lws_create_context],
+                 [WEBSOCKETS_LIBS="$WEBSOCKETS_LIBS -lwebsockets"],
+                 [AC_MSG_WARN([
+  --------------------------------------------
+   Unable to find libwebsockets.
+   Support for Kubernetes will be disabled.
+  --------------------------------------------])
+                 have_libwebsockets=no])
+fi
+
+if test "x$with_websockets" != "xno"
+then
+
+    # Check for client-specific closed event, which must be used in favor of
+    # the generic closed event if libwebsockets is recent enough to provide
+    # this
+    AC_CHECK_DECL([LWS_CALLBACK_CLIENT_CLOSED],
+        [AC_DEFINE([HAVE_LWS_CALLBACK_CLIENT_CLOSED],,
+                   [Whether LWS_CALLBACK_CLIENT_CLOSED is defined])],,
+        [#include <libwebsockets.h>])
+
+    # Older versions of libwebsockets may not define a flag for requesting
+    # global initialization of OpenSSL, instead performing that initialization
+    # by default
+    AC_CHECK_DECL([LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT],
+        [AC_DEFINE([HAVE_LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT],,
+                   [Whether LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT is defined])],,
+        [#include <libwebsockets.h>])
+
+    # Older versions of libwebsockets do not define special macros for SSL
+    # connection flags, instead relying on documented integer values
+    AC_CHECK_DECL([LCCSCF_USE_SSL],
+        [AC_DEFINE([HAVE_LCCSCF_USE_SSL],,
+                   [Whether LCCSCF_USE_SSL is defined])],,
+        [#include <libwebsockets.h>])
+
+    # Older versions of libwebsockets do not define a dummy callback which
+    # must be invoked after the main event callback is invoked; the main event
+    # callback must instead manually return zero
+    AC_CHECK_DECL([lws_callback_http_dummy],
+        [AC_DEFINE([HAVE_LWS_CALLBACK_HTTP_DUMMY],,
+                   [Whether lws_callback_http_dummy() is defined])],,
+        [#include <libwebsockets.h>])
+
+fi
+
+AM_CONDITIONAL([ENABLE_WEBSOCKETS],
+               [test "x${have_libwebsockets}"  = "xyes"])
+
+AC_SUBST(WEBSOCKETS_LIBS)
+
+#
+# Kubernetes
+#
+
+AC_ARG_ENABLE([kubernetes],
+              [AS_HELP_STRING([--disable-kubernetes],
+                              [do not build support for attaching to Kubernetes pods])],
+              [],
+              [enable_kubernetes=yes])
+
+AM_CONDITIONAL([ENABLE_KUBERNETES], [test "x${enable_kubernetes}"  = "xyes" \
+                                       -a "x${have_libwebsockets}" = "xyes" \
+                                       -a "x${have_ssl}"           = "xyes" \
+                                       -a "x${have_terminal}"      = "xyes"])
+
+#
 # guacd
 #
 
@@ -1217,11 +1303,12 @@ AM_CONDITIONAL([ENABLE_GUACLOG], [test "x${enable_guaclog}"  = "xyes"])
 
 AC_CONFIG_FILES([Makefile
                  doc/Doxyfile
-                 tests/Makefile
                  src/common/Makefile
+                 src/common/tests/Makefile
                  src/common-ssh/Makefile
                  src/terminal/Makefile
                  src/libguac/Makefile
+                 src/libguac/tests/Makefile
                  src/guacd/Makefile
                  src/guacd/man/guacd.8
                  src/guacd/man/guacd.conf.5
@@ -1230,6 +1317,7 @@ AC_CONFIG_FILES([Makefile
                  src/guaclog/Makefile
                  src/guaclog/man/guaclog.1
                  src/pulse/Makefile
+                 src/protocols/kubernetes/Makefile
                  src/protocols/rdp/Makefile
                  src/protocols/ssh/Makefile
                  src/protocols/telnet/Makefile
@@ -1240,10 +1328,11 @@ AC_OUTPUT
 # Protocol build status
 #
 
-AM_COND_IF([ENABLE_RDP],    [build_rdp=yes],    [build_rdp=no])
-AM_COND_IF([ENABLE_SSH],    [build_ssh=yes],    [build_ssh=no])
-AM_COND_IF([ENABLE_TELNET], [build_telnet=yes], [build_telnet=no])
-AM_COND_IF([ENABLE_VNC],    [build_vnc=yes],    [build_vnc=no])
+AM_COND_IF([ENABLE_KUBERNETES], [build_kubernetes=yes], [build_kubernetes=no])
+AM_COND_IF([ENABLE_RDP],        [build_rdp=yes],        [build_rdp=no])
+AM_COND_IF([ENABLE_SSH],        [build_ssh=yes],        [build_ssh=no])
+AM_COND_IF([ENABLE_TELNET],     [build_telnet=yes],     [build_telnet=no])
+AM_COND_IF([ENABLE_VNC],        [build_vnc=yes],        [build_vnc=no])
 
 #
 # Service / tool build status
@@ -1287,15 +1376,17 @@ $PACKAGE_NAME version $PACKAGE_VERSION
      libVNCServer ........ ${have_libvncserver}
      libvorbis ........... ${have_vorbis}
      libpulse ............ ${have_pulse}
+     libwebsockets ....... ${have_libwebsockets}
      libwebp ............. ${have_webp}
      wsock32 ............. ${have_winsock}
 
    Protocol support:
 
-      RDP ....... ${build_rdp}
-      SSH ....... ${build_ssh}
-      Telnet .... ${build_telnet}
-      VNC ....... ${build_vnc}
+      Kubernetes .... ${build_kubernetes}
+      RDP ........... ${build_rdp}
+      SSH ........... ${build_ssh}
+      Telnet ........ ${build_telnet}
+      VNC ........... ${build_vnc}
 
    Services / tools:
 

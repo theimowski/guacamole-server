@@ -49,6 +49,7 @@ ARG BUILD_DEPENDENCIES="              \
         libtelnet-dev                 \
         libtool                       \
         libvncserver-dev              \
+        libwebsockets-dev             \
         libwebp-dev                   \
         make"
 
@@ -89,6 +90,7 @@ ENV LD_LIBRARY_PATH=${PREFIX_DIR}/lib
 ENV GUACD_LOG_LEVEL=info
 
 ARG RUNTIME_DEPENDENCIES="            \
+        ca-certificates               \
         ghostscript                   \
         libfreerdp-plugins-standard   \
         fonts-liberation              \

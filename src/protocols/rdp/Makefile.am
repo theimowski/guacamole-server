@@ -16,6 +16,12 @@
 # specific language governing permissions and limitations
 # under the License.
 #
+# NOTE: Parts of this file (Makefile.am) are automatically transcluded verbatim
+# into Makefile.in. Though the build system (GNU Autotools) automatically adds
+# its own license boilerplate to the generated Makefile.in, that boilerplate
+# does not apply to the transcluded portions of Makefile.am which are licensed
+# to you by the ASF under the Apache License, Version 2.0, as described above.
+#
 
 AUTOMAKE_OPTIONS = foreign
 ACLOCAL_AMFLAGS = -I m4
@@ -252,6 +258,7 @@ rdp_keymaps =                   \
     $(srcdir)/keymaps/base.keymap         \
     $(srcdir)/keymaps/failsafe.keymap     \
     $(srcdir)/keymaps/de_de_qwertz.keymap \
+    $(srcdir)/keymaps/de_ch_qwertz.keymap \
     $(srcdir)/keymaps/en_gb_qwerty.keymap \
     $(srcdir)/keymaps/en_us_qwerty.keymap \
     $(srcdir)/keymaps/es_es_qwerty.keymap \
@@ -261,6 +268,7 @@ rdp_keymaps =                   \
     $(srcdir)/keymaps/ja_jp_qwerty.keymap \
     $(srcdir)/keymaps/pt_br_qwerty.keymap \
     $(srcdir)/keymaps/sv_se_qwerty.keymap \
+    $(srcdir)/keymaps/da_dk_qwerty.keymap \
     $(srcdir)/keymaps/tr_tr_qwerty.keymap
 
 _generated_keymaps.c: $(rdp_keymaps)

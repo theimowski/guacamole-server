@@ -77,7 +77,8 @@ const char* GUAC_VNC_CLIENT_ARGS[] = {
     "recording-exclude-mouse",
     "recording-include-keys",
     "create-recording-path",
-
+    "disable-copy",
+    "disable-paste",
     NULL
 };
 
@@ -198,6 +199,11 @@ enum VNC_ARGS_IDX {
     IDX_SFTP_HOSTNAME,
 
     /**
+     * The public SSH host key to identify the SFTP server.
+     */
+    IDX_SFTP_HOST_KEY,
+
+    /**
      * The port of the SSH server to connect to for SFTP. If blank, the default
      * SSH port of "22" will be used.
      */
@@ -208,11 +214,6 @@ enum VNC_ARGS_IDX {
      * SFTP.
      */
     IDX_SFTP_USERNAME,
-
-    /**
-     * The public SSH host key to identify the SFTP server.
-     */
-    IDX_SFTP_HOST_KEY,
 
     /**
      * The password to provide when authenticating with the SSH server for
@@ -297,6 +298,20 @@ enum VNC_ARGS_IDX {
      * created if it does not yet exist.
      */
     IDX_CREATE_RECORDING_PATH,
+
+    /**
+     * Whether outbound clipboard access should be blocked. If set to "true",
+     * it will not be possible to copy data from the remote desktop to the
+     * client using the clipboard. By default, clipboard access is not blocked.
+     */
+    IDX_DISABLE_COPY,
+
+    /**
+     * Whether inbound clipboard access should be blocked. If set to "true", it
+     * will not be possible to paste data from the client to the remote desktop
+     * using the clipboard. By default, clipboard access is not blocked.
+     */
+    IDX_DISABLE_PASTE,
 
     VNC_ARGS_COUNT
 };
@@ -492,6 +507,16 @@ guac_vnc_settings* guac_vnc_parse_args(guac_user* user,
     settings->create_recording_path =
         guac_user_parse_args_boolean(user, GUAC_VNC_CLIENT_ARGS, argv,
                 IDX_CREATE_RECORDING_PATH, false);
+
+    /* Parse clipboard copy disable flag */
+    settings->disable_copy =
+        guac_user_parse_args_boolean(user, GUAC_VNC_CLIENT_ARGS, argv,
+                IDX_DISABLE_COPY, false);
+
+    /* Parse clipboard paste disable flag */
+    settings->disable_paste =
+        guac_user_parse_args_boolean(user, GUAC_VNC_CLIENT_ARGS, argv,
+                IDX_DISABLE_PASTE, false);
 
     return settings;
 
