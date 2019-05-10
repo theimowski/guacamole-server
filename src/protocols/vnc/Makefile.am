@@ -61,6 +61,8 @@ libguac_client_vnc_la_CFLAGS =        \
 
 libguac_client_vnc_la_LDFLAGS = \
     -version-info 0:0:0         \
+    -shared                     \
+    -no-undefined               \
     @CAIRO_LIBS@                \
     @VNC_LIBS@ 
 
