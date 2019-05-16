@@ -124,9 +124,8 @@ rfbClient* guac_vnc_get_client(guac_client* client) {
     }
 #endif
 
-    /* Set encodings if provided */
-    if (vnc_settings->encodings)
-        rfb_client->appData.encodingsString = strdup(vnc_settings->encodings);
+    /* Datto always set to raw encoding (loopback) */
+    rfb_client->appData.encodingsString = "raw";
 
     /* Connect */
     if (rfbInitClient(rfb_client, NULL, NULL))
