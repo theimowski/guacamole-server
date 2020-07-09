@@ -338,12 +338,19 @@ struct guac_terminal {
     int cursor_col;
 
     /**
+     * The desired visibility state of the cursor.
+     */
+    bool cursor_visible;
+
+    /**
      * The row of the rendered cursor.
+     * Will be set to -1 if the cursor is not visible.
      */
     int visible_cursor_row;
 
     /**
      * The column of the rendered cursor.
+     * Will be set to -1 if the cursor is not visible.
      */
     int visible_cursor_col;
 
@@ -507,6 +514,25 @@ struct guac_terminal {
     guac_common_clipboard* clipboard;
 
     /**
+     * The name of the font to use when rendering glyphs, as requested at
+     * creation time or via guac_terminal_apply_font().
+     */
+    const char* font_name;
+
+    /**
+     * The size of each glyph, in points, as requested at creation time or via
+     * guac_terminal_apply_font().
+     */
+    int font_size;
+
+    /**
+     * The name of the color scheme to use, as requested at creation time or
+     * via guac_terminal_apply_color_scheme(). This string must be in the
+     * format accepted by guac_terminal_parse_color_scheme().
+     */
+    const char* color_scheme;
+
+    /**
      * ASCII character to send when backspace is pressed.
      */
     char backspace;
@@ -574,11 +600,8 @@ struct guac_terminal {
  *     The height of the terminal, in pixels.
  *
  * @param color_scheme
- *     The name of the color scheme to use. This string must be one of the
- *     names defined by the GUAC_TERMINAL_SCHEME_* constants. If blank or NULL,
- *     the default scheme of GUAC_TERMINAL_SCHEME_GRAY_BLACK will be used. If
- *     invalid, a warning will be logged, and the terminal will fall back on
- *     GUAC_TERMINAL_SCHEME_GRAY_BLACK.
+ *     The name of the color scheme to use. This string must be in the format
+ *     accepted by guac_terminal_parse_color_scheme().
  *
  * @param backspace
  *     The integer ASCII code to send when backspace is pressed in
