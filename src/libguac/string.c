@@ -44,9 +44,6 @@
 
 size_t guac_strlcpy(char* restrict dest, const char* restrict src, size_t n) {
 
-#ifdef HAVE_STRLCPY
-    return strlcpy(dest, src, n);
-#else
     /* Calculate actual length of desired string */
     size_t length = strlen(src);
 
@@ -66,18 +63,13 @@ size_t guac_strlcpy(char* restrict dest, const char* restrict src, size_t n) {
 
     /* Return the overall length of the desired string */
     return length;
-#endif
 
 }
 
 size_t guac_strlcat(char* restrict dest, const char* restrict src, size_t n) {
 
-#ifdef HAVE_STRLCPY
-    return strlcat(dest, src, n);
-#else
     size_t length = strnlen(dest, n);
     return length + guac_strlcpy(dest + length, src, REMAINING(n, length));
-#endif
 
 }
 
